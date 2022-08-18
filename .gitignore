@@ -5,3 +5,10 @@ __pycache__
 *.npz
 kitti_data
 models
+assert
+*.pth
+*.pt
+*.ph
+save_models
+assert
+*.log

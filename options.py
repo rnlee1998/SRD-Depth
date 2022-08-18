@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import argparse
-
+from datetime import datetime
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
-
+exp_name = '%s'%(datetime.now().strftime('%m%d'))
 
 class MonodepthOptions:
     def __init__(self):
@@ -20,11 +20,11 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "kitti_data"))
+                                 default="/mnt/data/liran/dataset/kitti_dataset/raw_data/")
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp"))
+                                 default=os.path.join('./save_models/',exp_name))
 
         # TRAINING options
         self.parser.add_argument("--model_name",
