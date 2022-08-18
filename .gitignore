@@ -10,5 +10,5 @@ assert
 *.pt
 *.ph
 save_models
-assert
+asserts
 *.log
