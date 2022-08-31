@@ -84,7 +84,7 @@ class MonoDataset(data.Dataset):
             s = 2 ** i
             
             self.resize[i] = transforms.Resize((self.height // s, self.width // s),
-                                               interpolation=self.interp)
+                                               interpolation=InterpolationMode.LANCZOS)
 
         self.load_depth = self.check_depth()
 
@@ -108,6 +108,13 @@ class MonoDataset(data.Dataset):
                 n, im, i = k
                 inputs[(n, im, i)] = self.to_tensor(f)
                 inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))
+
+        # for k in list(inputs):
+        #     f = inputs[k]
+        #     if "color_pose" in k:
+        #         n, im, i = k
+        #         inputs[(n, im, i)] = self.to_tensor(f)
+        #         inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))        
 
     def __len__(self):
         return len(self.filenames)
@@ -140,6 +147,7 @@ class MonoDataset(data.Dataset):
 
         do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and random.random() > 0.5
+        do_cutflip = [self.is_train and random.random() > 0.5,random.uniform(0.4,0.6)]# [是否做cutflip,cutflip的高度]
 
         line = self.filenames[index].split()
         folder = line[0]
@@ -157,9 +165,11 @@ class MonoDataset(data.Dataset):
         for i in self.frame_idxs:
             if i == "s":
                 other_side = {"r": "l", "l": "r"}[side]
-                inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
+                inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip, do_cutflip)
+                # inputs[("color_pose", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
             else:
-                inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
+                inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip, do_cutflip)
+                # inputs[("color_pose", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):
@@ -174,7 +184,7 @@ class MonoDataset(data.Dataset):
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
         if do_color_aug:
-            color_aug = transforms.ColorJitter( self.brightness, self.contrast, self.saturation, self.hue)
+            color_aug = transforms.ColorJitter(self.brightness, self.contrast, self.saturation, self.hue)
         else:
             color_aug = (lambda x: x)
 

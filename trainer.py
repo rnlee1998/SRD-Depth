@@ -23,6 +23,7 @@ from layers import *
 
 import datasets
 import networks
+from networks import resnet_encoder,pose_decoder,mpvit
 from IPython import embed
 
 
@@ -35,7 +36,7 @@ class Trainer:
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
         assert self.opt.width % 32 == 0, "'width' must be a multiple of 32"
 
-        self.models = {}
+        self.models = {}            #整个模型
         self.parameters_to_train = []
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
@@ -51,10 +52,16 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        self.models["encoder"] = networks.ResnetEncoder(
-            self.opt.num_layers, self.opt.weights_init == "pretrained")
+        # self.models["encoder"] = resnet_encoder.ResnetEncoder(
+        #     self.opt.num_layers, self.opt.weights_init == "pretrained")
+        # self.models["encoder"].to(self.device)
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
+
+        self.models["encoder"] = mpvit.mpvit_small()
+        self.models["encoder"].num_ch_enc = [64,128,216,288,288]
         self.models["encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["encoder"].parameters())
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
+
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
@@ -63,7 +70,7 @@ class Trainer:
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
-                self.models["pose_encoder"] = networks.ResnetEncoder(
+                self.models["pose_encoder"] = resnet_encoder.ResnetEncoder(
                     self.opt.num_layers,
                     self.opt.weights_init == "pretrained",
                     num_input_images=self.num_pose_frames)
@@ -71,7 +78,7 @@ class Trainer:
                 self.models["pose_encoder"].to(self.device)
                 self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
-                self.models["pose"] = networks.PoseDecoder(
+                self.models["pose"] = pose_decoder.PoseDecoder(
                     self.models["pose_encoder"].num_ch_enc,
                     num_input_features=1,
                     num_frames_to_predict_for=2)
@@ -99,9 +106,24 @@ class Trainer:
             self.models["predictive_mask"].to(self.device)
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
 
-        self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
-        self.model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+        # self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+        # self.model_lr_scheduler = optim.lr_scheduler.StepLR(
+        #     self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+
+        self.params = [ {
+            "params":self.parameters_to_train, 
+            "lr": 1e-4
+            #"weight_decay": 0.01
+            },
+            {
+            "params": list(self.models["encoder"].parameters()), 
+           "lr": self.opt.learning_rate
+            #"weight_decay": 0.01
+            } ]
+            
+        self.model_optimizer = optim.AdamW(self.params)
+        self.model_lr_scheduler = optim.lr_scheduler.ExponentialLR(
+		self.model_optimizer,0.9)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()

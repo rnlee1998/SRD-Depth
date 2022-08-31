@@ -5,8 +5,10 @@
 # available in the LICENSE file.
 
 from __future__ import absolute_import, division, print_function
+import copy
 
 import os
+import random
 import skimage.transform
 import numpy as np
 import PIL.Image as pil
@@ -46,13 +48,40 @@ class KITTIDataset(MonoDataset):
 
         return os.path.isfile(velo_filename)
 
-    def get_color(self, folder, frame_index, side, do_flip):
+    def get_color(self, folder, frame_index, side, do_flip, do_cutflip=None):
         color = self.loader(self.get_image_path(folder, frame_index, side))
 
         if do_flip:
             color = color.transpose(pil.FLIP_LEFT_RIGHT)
 
+        if do_cutflip[0]:
+            w,h = color.size 
+            h_graft = int(h*do_cutflip[1])
+            color = self.cut_flip(color,h_graft)
+
         return color
+
+    def cut_flip(self,image,h_graft):
+
+        image = np.array(image)
+        image_copy = copy.deepcopy(image)
+        h, w, c = image.shape
+        N = 2    # split numbers
+        h_list = []
+        h_interval_list = []   # hight interval
+        if N==2:
+            h_list.append(h_graft)
+        h_list.append(h)
+        h_list.append(0)  
+        h_list.sort()
+        h_list_inv = np.array([h]*(N+1))-np.array(h_list)
+        for i in range(len(h_list)-1):
+            h_interval_list.append(h_list[i+1]-h_list[i])
+        for i in range(N):
+            image[h_list[i]:h_list[i+1], :, :] = image_copy[h_list_inv[i]-h_interval_list[i]:h_list_inv[i], :, :]
+            
+        return pil.fromarray(image)
+
 
 
 class KITTIRAWDataset(KITTIDataset):
