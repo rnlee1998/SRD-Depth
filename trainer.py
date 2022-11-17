@@ -261,7 +261,7 @@ class Trainer:
             
             before_op_time = time.time()
 
-            outputs, outputs_before, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs)
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
@@ -279,7 +279,7 @@ class Trainer:
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
-                self.log("train", inputs, outputs, losses, outputs_before)
+                self.log("train", inputs, outputs, losses)
                 self.val()
 
             self.step += 1
@@ -327,7 +327,7 @@ class Trainer:
         self.generate_images_pred(inputs, outputs, outputs_before)
         losses = self.compute_losses(inputs, outputs, outputs_before)
 
-        return outputs, outputs_before, losses
+        return outputs, losses
 
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
@@ -461,7 +461,7 @@ class Trainer:
             inputs = self.val_iter.next()
 
         with torch.no_grad():
-            outputs, outputs_before, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs)
 
             if "depth_gt" in inputs:
                 self.compute_depth_losses(inputs, outputs, losses)
@@ -668,11 +668,11 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
             if outputs_before:
-                # depth_loss = torch.abs(depth-depth_before.detach()) 
-                uncer_loss = torch.square((depth-depth_before.detach())/(uncer_before+1e-7)) \
-                            +4*torch.log(uncer_before+1e-7).mean()
-                # loss = loss +  depth_loss.mean()
-                loss = loss + 0.1*uncer_loss
+                # depth_loss = torch.abs(depth-depth_before.detach())*(1-uncertain_map)  
+                uncer_loss = 0.1*(torch.square((depth-depth_before.detach())/(uncer_before+1e-7)) \
+                            +4*torch.log(uncer_before+1e-7)).mean()
+                # loss += depth_loss.mean()
+                loss = loss + uncer_loss
 
             loss = loss + self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss = total_loss + loss
@@ -724,7 +724,7 @@ class Trainer:
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
-    def log(self, mode, inputs, outputs, losses, outputs_before=None):
+    def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
@@ -745,10 +745,6 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                if outputs_before:
-                    writer.add_image(
-                    "uncer_{}/{}".format(s, j),
-                    normalize_image(1/(1e-7+outputs_before[("uncer", s)][j])), self.step)
 
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
