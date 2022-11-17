@@ -66,10 +66,12 @@ class DepthDecoder(nn.Module):
 
         for i in range(4):
             self.convs["dispconv{}".format(i)] = Conv3x3(self.num_ch_dec[i], self.num_output_channels)
+            self.convs["uncerconv{}".format(i)] = Conv3x3(self.num_ch_dec[i], self.num_output_channels)
                 
 
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
+        self.relu = nn.ReLU()
 
     def nestConv(self, conv, high_feature, low_features):
         conv_0 = conv[0]
@@ -118,9 +120,19 @@ class DepthDecoder(nn.Module):
         x = features["X_04"]
         x = self.convs["X_04_Conv_0"](x)
         x = self.convs["X_04_Conv_1"](upsample(x))
-        outputs[("disp", 0)] = self.sigmoid(self.convs["dispconv0"](x))
-        outputs[("disp", 1)] = self.sigmoid(self.convs["dispconv1"](features["X_04"]))
-        outputs[("disp", 2)] = self.sigmoid(self.convs["dispconv2"](features["X_13"]))
-        outputs[("disp", 3)] = self.sigmoid(self.convs["dispconv3"](features["X_22"]))
+        outputs[("disp", 0)] = self.sigmoid(self.convs["dispconv0"](x))                 #[12,1,192,640]
+        outputs[("disp", 1)] = self.sigmoid(self.convs["dispconv1"](features["X_04"]))  #[12,1,96,320]
+        outputs[("disp", 2)] = self.sigmoid(self.convs["dispconv2"](features["X_13"]))  #[12,1,48,160]
+        outputs[("disp", 3)] = self.sigmoid(self.convs["dispconv3"](features["X_22"]))  #[12,1,24,80]
+        
+        for i in self.scales:
+            # outputs[("uncer", 0)] = self.sigmoid(self.convs["uncerconv0"](x))
+            # outputs[("uncer", 1)] = self.sigmoid(self.convs["uncerconv1"](features["X_04"]))
+            # outputs[("uncer", 2)] = self.sigmoid(self.convs["uncerconv2"](features["X_13"]))
+            # outputs[("uncer", 3)] = self.sigmoid(self.convs["uncerconv3"](features["X_22"]))
+            outputs[("uncer", 0)] = self.sigmoid(self.convs["uncerconv0"](x))
+            outputs[("uncer", 1)] = self.sigmoid(self.convs["uncerconv1"](features["X_04"]))
+            outputs[("uncer", 2)] = self.sigmoid(self.convs["uncerconv2"](features["X_13"]))
+            outputs[("uncer", 3)] = self.sigmoid(self.convs["uncerconv3"](features["X_22"]))            
         return outputs
         

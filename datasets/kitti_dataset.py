@@ -54,7 +54,7 @@ class KITTIDataset(MonoDataset):
         if do_flip:
             color = color.transpose(pil.FLIP_LEFT_RIGHT)
 
-        if do_cutflip[0]:
+        if (not do_cutflip==None) and (do_cutflip[0]==True):
             w,h = color.size 
             h_graft = int(h*do_cutflip[1])
             color = self.cut_flip(color,h_graft)
