@@ -26,7 +26,7 @@ import datasets
 import networks
 from networks import resnet_encoder,pose_decoder,mpvit
 from IPython import embed
-
+import copy
 
 class Trainer:
     def __init__(self, options):
@@ -260,13 +260,32 @@ class Trainer:
         for batch_idx, inputs in enumerate(self.train_loader):
             
             before_op_time = time.time()
-
+            if self.step==0:
+                params_encoder_t = copy.deepcopy(self.models["encoder"].state_dict())
+                params_depth_t = copy.deepcopy(self.models["depth"].state_dict())
             outputs, losses = self.process_batch(inputs)
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
             self.model_optimizer.step()
+            
+            with torch.no_grad():
+                params_encoder_s = self.models["encoder"].state_dict()
+                params_depth_s = self.models["depth"].state_dict()
+                
+                uniform_soup = {k: v * (0.001) + params_encoder_t[k] * (0.999) for k, v in params_encoder_s.items()}
+                params_encoder_t.update(uniform_soup)
+                uniform_soup = {k: v * (0.001) + params_depth_t[k] * (0.999) for k, v in params_depth_s.items()}
+                params_depth_t.update(uniform_soup)
 
+                # buffers_encoder_s = self.models["encoder"].buffers()
+                # buffers_depth_s = self.models["depth"].buffers()
+                # buffers_encoder_t = self.models_before["encoder"].buffers()
+                # buffers_depth_t = self.models_before["depth"].buffers()
+                # for s,t in zip(buffers_encoder_s,buffers_encoder_t):
+                #     t = 0.999*t+0.001*s
+                # for s,t in zip(buffers_depth_s,buffers_depth_t):
+                #     t = 0.999*t+0.001*s                
             duration = time.time() - before_op_time
 
             # log less frequently after the first 2000 steps to save time & disk space
@@ -668,11 +687,11 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
             if outputs_before:
-                # depth_loss = torch.abs(depth-depth_before.detach())*(1-uncertain_map)  
-                uncer_loss = 0.1*(torch.square((depth-depth_before.detach())/(uncer_before+1e-7)) \
-                            +4*torch.log(uncer_before+1e-7)).mean()
-                # loss += depth_loss.mean()
-                loss = loss + uncer_loss
+                depth_loss = torch.abs(depth-depth_before.detach())  
+                # uncer_loss = 0.1*(torch.square((depth-depth_before.detach())/(uncer+1e-7)) \
+                            # +4*torch.log(uncer+1e-7)).mean()
+                loss =loss +  0.1*depth_loss.mean()
+                # loss = loss + uncer_loss
 
             loss = loss + self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss = total_loss + loss
@@ -745,7 +764,9 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-
+                writer.add_image(
+                    "uncer_{}/{}".format(s, j),
+                    normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(
