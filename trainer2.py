@@ -687,11 +687,11 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
             if outputs_before:
-                depth_loss = torch.abs(depth-depth_before.detach())  
-                # uncer_loss = torch.square((depth-depth_before.detach())/(uncer+1e-7)).sum()/((1/(uncer**2+1e-7)).sum()) \
-                            # +(4*torch.log(uncer+1e-7)).mean()
-                loss =loss +  0.1*depth_loss.mean()
-                # loss = loss + uncer_loss
+                # depth_loss = torch.abs(depth-depth_before.detach())  
+                uncer_loss = torch.square((depth-depth_before.detach())/(uncer+1e-7)).sum()/((1/(uncer**2+1e-7)).sum()) \
+                            +(4*torch.log(uncer+1e-7)).mean()
+                # loss =loss +  0.1*depth_loss.mean()
+                loss = loss + 0.1*uncer_loss
 
             loss = loss + self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss = total_loss + loss
@@ -764,13 +764,9 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                # writer.add_image(
-                #     "uncer_{}/{}".format(s, j),
-                #     normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
-                if s<3:
-                    writer.add_image(
-                        "delta_{}/{}".format(s, j),
-                        colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True)), self.step)
+                writer.add_image(
+                    "uncer_{}/{}".format(s, j),
+                    normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(
