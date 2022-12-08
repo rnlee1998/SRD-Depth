@@ -24,7 +24,7 @@ from layers import *
 
 import datasets
 import networks
-from networks import resnet_encoder,pose_decoder,mpvit
+from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder,depth_decoder
 from IPython import embed
 import copy
 
@@ -51,8 +51,7 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
         if self.opt.use_stereo:
-            self.opt.frame_ids.append("s")
-
+            self.opt.frame_ids.append("s")      
         # self.models["encoder"] = resnet_encoder.ResnetEncoder(
         #     self.opt.num_layers, self.opt.weights_init == "pretrained")
         # self.models["encoder"].to(self.device)
@@ -63,7 +62,10 @@ class Trainer:
         self.models["encoder"].to(self.device)
         # self.parameters_to_train += list(self.models["encoder"].parameters())
 
-
+        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny")
+        # self.models["encoder"].to(self.device)
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
+ 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
@@ -496,25 +498,23 @@ class Trainer:
         """
         for scale in self.opt.scales:
             disp = outputs[("disp", scale)]
-            uncer = outputs[("uncer", scale)]
+            # uncer = outputs[("uncer", scale)]
 
             if outputs_before:
                 disp_before = outputs_before[("disp", scale)]
-                uncer_before = outputs_before[("uncer", scale)]
+                # uncer_before = outputs_before[("uncer", scale)]
 
             if self.opt.v1_multiscale:
                 source_scale = scale
             else:
                 disp = F.interpolate(
                     disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                uncer = F.interpolate(
-                    uncer, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                # uncer = F.interpolate(
+                #     uncer, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
                 source_scale = 0
                 if outputs_before:
                     disp_before = F.interpolate(
                         disp_before, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                    uncer_before = F.interpolate(
-                        uncer_before, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
             if outputs_before:
@@ -522,11 +522,11 @@ class Trainer:
 
 
             outputs[("depth", 0, scale)] = depth
-            outputs[("uncer", scale)] = uncer
+            # outputs[("uncer", scale)] = uncer
 
             if outputs_before:
                 outputs_before[("depth", 0, scale)] = depth_before
-                outputs_before[("uncer", scale)] = uncer_before
+                # outputs_before[("uncer", scale)] = uncer_before
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
@@ -609,13 +609,13 @@ class Trainer:
                 source_scale = 0
 
             disp = outputs[("disp", scale)]
-            uncer = outputs[("uncer", scale)]
+            # uncer = outputs[("uncer", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
             if outputs_before:
                 depth = outputs[("depth", 0, scale)]
                 depth_before = outputs_before[("depth", 0, scale)]
-                uncer_before = outputs_before[("uncer", scale)]
+                # uncer_before = outputs_before[("uncer", scale)]
 
             for frame_id in self.opt.frame_ids[1:]:     # [0,-1,1]
                 pred = outputs[("color", frame_id, scale)]
@@ -687,11 +687,11 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
             if outputs_before:
-                # depth_loss = torch.abs(depth-depth_before.detach())  
-                uncer_loss = torch.square((depth-depth_before.detach())/(uncer+1e-7)).sum()/((1/(uncer**2+1e-7)).sum()) \
-                            +(4*torch.log(uncer+1e-7)).mean()
-                # loss =loss +  0.1*depth_loss.mean()
-                loss = loss + 0.1*uncer_loss
+                depth_loss = torch.abs(depth-depth_before.detach())  
+                # uncer_loss = torch.square((depth-depth_before.detach())/(uncer+1e-7)).sum()/((1/(uncer**2+1e-7)).sum()) \
+                            # +(4*torch.log(uncer+1e-7)).mean()
+                loss =loss +  0.1*depth_loss.mean()
+                # loss = loss + uncer_loss
 
             loss = loss + self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss = total_loss + loss
@@ -764,9 +764,13 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                writer.add_image(
-                    "uncer_{}/{}".format(s, j),
-                    normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
+                # writer.add_image(
+                #     "uncer_{}/{}".format(s, j),
+                #     normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
+                if s<3:
+                    writer.add_image(
+                        "delta_{}/{}".format(s, j),
+                        colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True)), self.step)
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(

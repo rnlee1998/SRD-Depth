@@ -112,7 +112,7 @@ class DepthDecoder(nn.Module):
         feat[2] = self.convs["f2"](input_features[2])
         feat[1] = self.convs["f1"](input_features[1])
         feat[0] = input_features[0]
-        
+
         features = {}
         for i in range(5):
             features["X_{}0".format(i)] = feat[i]
@@ -161,11 +161,11 @@ class DepthDecoder(nn.Module):
         # outputs[("disp", 2)] = self.sigmoid(self.convs["dispconv2"](features["X_13"]))  #[12,1,48,160]
         # outputs[("disp", 3)] = self.sigmoid(self.convs["dispconv3"](features["X_22"]))  #[12,1,24,80]
 
-        for i in self.scales:
-            outputs[("uncer", 0)] = self.sigmoid(self.convs["uncerconv0"](x))
-            outputs[("uncer", 1)] = self.sigmoid(self.convs["uncerconv1"](features["X_04"]))
-            outputs[("uncer", 2)] = self.sigmoid(self.convs["uncerconv2"](features["X_13"]))
-            outputs[("uncer", 3)] = self.sigmoid(self.convs["uncerconv3"](features["X_22"]))            
+        # for i in self.scales:
+        #     outputs[("uncer", 0)] = self.sigmoid(self.convs["uncerconv0"](x))
+        #     outputs[("uncer", 1)] = self.sigmoid(self.convs["uncerconv1"](features["X_04"]))
+        #     outputs[("uncer", 2)] = self.sigmoid(self.convs["uncerconv2"](features["X_13"]))
+        #     outputs[("uncer", 3)] = self.sigmoid(self.convs["uncerconv3"](features["X_22"]))            
         return outputs
 
     def bilinear_interpolate_torch_gridsample(self, input, size, delta=0):

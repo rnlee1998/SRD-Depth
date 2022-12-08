@@ -12,3 +12,5 @@ assert
 save_models
 asserts
 *.log
+wandb
+results.txt

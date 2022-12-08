@@ -8,15 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-
-
-def upsample(x):
-    """Upsample input tensor by a factor of 2
-    """
-    return F.interpolate(x, scale_factor=2, mode="nearest")
-
-
 def visual_feature(features,stage):
     feature_map = features.squeeze(0).cpu()
     n,h,w = feature_map.size()

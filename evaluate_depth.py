@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import cv2
 from networks import mpvit
+from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder
 import numpy as np
 
 import torch
@@ -90,6 +91,12 @@ def evaluate(opt):
         encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
         encoder.num_ch_enc = [64,128,216,288,288]  # = networks.ResnetEncoder(opt.num_layers, False)
         depth_decoder = networks.DepthDecoder()
+
+        # encoder = resnet_encoder.ResnetEncoder(opt.num_layers, False)
+        # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
+
+        # encoder = swin_encoder.SwinEncoder("swin_tiny",False)
+        # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})

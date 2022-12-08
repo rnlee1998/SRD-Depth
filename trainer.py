@@ -24,9 +24,12 @@ from layers import *
 
 import datasets
 import networks
-from networks import resnet_encoder,pose_decoder,mpvit
+from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder
 from IPython import embed
 import copy
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel
+import torch.distributed as dist
 
 class Trainer:
     def __init__(self, options):
@@ -40,7 +43,10 @@ class Trainer:
         self.models = {}            #
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        # self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.device = torch.device('cuda',self.opt.local_rank)
+        dist.init_process_group(backend='nccl',rank=self.opt.local_rank, world_size=self.opt.word_size)
+        torch.cuda.set_device(self.device)
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -52,22 +58,37 @@ class Trainer:
 
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
-
+        
+        #   resnet
         # self.models["encoder"] = resnet_encoder.ResnetEncoder(
         #     self.opt.num_layers, self.opt.weights_init == "pretrained")
-        # self.models["encoder"].to(self.device)
-        # self.parameters_to_train += list(self.models["encoder"].parameters())
-
+        
+        #   mpvit
         self.models["encoder"] = mpvit.mpvit_small()
         self.models["encoder"].num_ch_enc = [64,128,216,288,288]
-        self.models["encoder"].to(self.device)
-        # self.parameters_to_train += list(self.models["encoder"].parameters())
 
+        #   swin Transformer
+        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny",pretrained=True)
+
+        self.models["encoder"].to(self.device)
+        
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
+
+        # dataparallel
+        self.models["encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["encoder"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
+        self.models["depth"] = torch.nn.parallel.DistributedDataParallel(self.models["depth"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
         
         self.models_before ={}
         self.models_before["encoder"] = copy.deepcopy(self.models["encoder"])
@@ -88,10 +109,16 @@ class Trainer:
                     num_input_features=1,
                     num_frames_to_predict_for=2)
                 
-                # self.models_before["pose_encoder"] = copy.deepcopy(self.models["pose_encoder"])
-                # self.models_before["pose"] = copy.deepcopy(self.models["pose"])
-                # self.models_before["pose"].to(self.device)
-
+                self.models["pose_encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["pose_encoder"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
+                self.models["pose"] = torch.nn.parallel.DistributedDataParallel(self.models["pose"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(
@@ -160,9 +187,16 @@ class Trainer:
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
-        self.train_loader = DataLoader(
-            train_dataset, self.opt.batch_size, True,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
+        # sampler
+        self.train_sampler  = DistributedSampler(train_dataset)
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, 	
+											batch_size=self.opt.batch_size,
+											drop_last=True,
+											sampler=self.train_sampler,
+                                            num_workers=self.opt.num_workers)        
+        # self.train_loader = DataLoader(
+        #     train_dataset, self.opt.batch_size, True,
+        #     num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
@@ -219,8 +253,9 @@ class Trainer:
         self.step = 0
         self.start_time = time.time()
         for self.epoch in range(self.opt.num_epochs):
+            dist.barrier()
             self.run_epoch()
-            if (self.epoch + 1) % self.opt.save_frequency == 0:
+            if (self.epoch + 1) % self.opt.save_frequency == 0 and self.opt.local_rank==0:
                 self.save_model()
 
     def run_epoch(self):
@@ -258,7 +293,7 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-            
+            self.train_sampler.set_epoch(self.epoch)
             before_op_time = time.time()
             # if self.step==0:
             #     params_encoder_t = copy.deepcopy(self.models["encoder"].state_dict())
@@ -496,25 +531,23 @@ class Trainer:
         """
         for scale in self.opt.scales:
             disp = outputs[("disp", scale)]
-            uncer = outputs[("uncer", scale)]
+            # uncer = outputs[("uncer", scale)]
 
             if outputs_before:
                 disp_before = outputs_before[("disp", scale)]
-                uncer_before = outputs_before[("uncer", scale)]
+                # uncer_before = outputs_before[("uncer", scale)]
 
             if self.opt.v1_multiscale:
                 source_scale = scale
             else:
                 disp = F.interpolate(
                     disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                uncer = F.interpolate(
-                    uncer, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                # uncer = F.interpolate(
+                #     uncer, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
                 source_scale = 0
                 if outputs_before:
                     disp_before = F.interpolate(
                         disp_before, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                    uncer_before = F.interpolate(
-                        uncer_before, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
             if outputs_before:
@@ -522,11 +555,11 @@ class Trainer:
 
 
             outputs[("depth", 0, scale)] = depth
-            outputs[("uncer", scale)] = uncer
+            # outputs[("uncer", scale)] = uncer
 
             if outputs_before:
                 outputs_before[("depth", 0, scale)] = depth_before
-                outputs_before[("uncer", scale)] = uncer_before
+                # outputs_before[("uncer", scale)] = uncer_before
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
@@ -609,13 +642,13 @@ class Trainer:
                 source_scale = 0
 
             disp = outputs[("disp", scale)]
-            uncer = outputs[("uncer", scale)]
+            # uncer = outputs[("uncer", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
             if outputs_before:
                 depth = outputs[("depth", 0, scale)]
                 depth_before = outputs_before[("depth", 0, scale)]
-                uncer_before = outputs_before[("uncer", scale)]
+                # uncer_before = outputs_before[("uncer", scale)]
 
             for frame_id in self.opt.frame_ids[1:]:     # [0,-1,1]
                 pred = outputs[("color", frame_id, scale)]
