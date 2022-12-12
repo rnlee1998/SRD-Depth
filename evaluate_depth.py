@@ -81,6 +81,7 @@ def evaluate(opt):
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
         encoder_dict = torch.load(encoder_path)
+        decoder_dict = torch.load(decoder_path)
 
         dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
@@ -88,24 +89,39 @@ def evaluate(opt):
         dataloader = DataLoader(dataset, 8, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
-        encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
-        encoder.num_ch_enc = [64,128,216,288,288]  # = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder()
+        # encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
+        # encoder.num_ch_enc = [64,128,216,288,288]  # = networks.ResnetEncoder(opt.num_layers, False)
+        # depth_decoder = networks.DepthDecoder()
 
-        # encoder = resnet_encoder.ResnetEncoder(opt.num_layers, False)
-        # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
+        encoder = resnet_encoder.ResnetEncoder(opt.num_layers, False)
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
 
         # encoder = swin_encoder.SwinEncoder("swin_tiny",False)
         # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
 
-        model_dict = encoder.state_dict()
-        encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        depth_decoder.load_state_dict(torch.load(decoder_path))
+        # 单卡训练请注释掉 DataParallel
+        encoder = torch.nn.DataParallel(encoder)
+        depth_decoder = torch.nn.DataParallel(depth_decoder)
 
         encoder.cuda()
         encoder.eval()
         depth_decoder.cuda()
         depth_decoder.eval()
+
+        model_dict = encoder.state_dict()
+        encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
+        depth_decoder.load_state_dict(torch.load(decoder_path))
+        # for k, v in encoder_dict.items():
+        #     if ('module' in k) and (k in model_dict):
+        #         encoder.load_state_dict({k.replace('module.',''): v})
+        #     elif (not 'module' in k) and (k in model_dict):
+        #         encoder.load_state_dict({k: v})
+        
+        # for k, v in decoder_dict.items():
+        #     if ('module' in k):
+        #         depth_decoder.load_state_dict({k.replace('module.',''): v},strict=False)
+        #     elif (not 'module' in k):
+        #         depth_decoder.load_state_dict({k: v})
 
         pred_disps = []
 
