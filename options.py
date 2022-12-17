@@ -52,11 +52,11 @@ class MonodepthOptions:
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
-                                 default=320)
+                                 default=192)
         self.parser.add_argument("--width",
                                  type=int,
                                  help="input image width",
-                                 default=1024)
+                                 default=640)
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -87,7 +87,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=4)
+                                 default=10)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -203,8 +203,8 @@ class MonodepthOptions:
                                       "from the original monodepth paper",
                                  action="store_true")
         self.parser.add_argument('--local_rank', type=int,default=0,help='local device id on current node')
-        self.parser.add_argument('--word_size', default=4,help="n_gpus")
-        self.parser.add_argument('--init_method', default='tcp://127.0.0.1:2345',help="init-method")
+        self.parser.add_argument('--word_size', default=2,help="n_gpus")
+        self.parser.add_argument('--init_method', default='tcp://127.0.0.1:5349',help="init-method")
 
     def parse(self):
         self.options = self.parser.parse_args()

@@ -18,16 +18,20 @@ from tensorboardX import SummaryWriter
 
 import json
 
-from utils import *
+from utils2 import *
 from kitti_utils import *
 from layers import *
 
 import datasets
 import networks
-from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder,depth_decoder
+from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder
 from IPython import embed
 import copy
-
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel
+import torch.distributed as dist
+import wandb
+wandb.init(project="monovit", entity="e701")
 class Trainer:
     def __init__(self, options):
         self.opt = options
@@ -40,7 +44,10 @@ class Trainer:
         self.models = {}            #
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        # self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.device = torch.device('cuda',self.opt.local_rank)
+        dist.init_process_group(backend='nccl',rank=self.opt.local_rank, world_size=self.opt.word_size)
+        torch.cuda.set_device(self.device)
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -51,25 +58,38 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
         if self.opt.use_stereo:
-            self.opt.frame_ids.append("s")      
+            self.opt.frame_ids.append("s")
+        
+        #   resnet
         # self.models["encoder"] = resnet_encoder.ResnetEncoder(
         #     self.opt.num_layers, self.opt.weights_init == "pretrained")
-        # self.models["encoder"].to(self.device)
-        # self.parameters_to_train += list(self.models["encoder"].parameters())
-
+        
+        #   mpvit
         self.models["encoder"] = mpvit.mpvit_small()
         self.models["encoder"].num_ch_enc = [64,128,216,288,288]
-        self.models["encoder"].to(self.device)
-        # self.parameters_to_train += list(self.models["encoder"].parameters())
 
-        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny")
-        # self.models["encoder"].to(self.device)
-        # self.parameters_to_train += list(self.models["encoder"].parameters())
- 
+        #   swin Transformer
+        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny",pretrained=True)
+
+        self.models["encoder"].to(self.device)
+        
+
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
+
+        # dataparallel
+        self.models["encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["encoder"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
+        self.models["depth"] = torch.nn.parallel.DistributedDataParallel(self.models["depth"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
         
         self.models_before ={}
         self.models_before["encoder"] = copy.deepcopy(self.models["encoder"])
@@ -90,10 +110,16 @@ class Trainer:
                     num_input_features=1,
                     num_frames_to_predict_for=2)
                 
-                # self.models_before["pose_encoder"] = copy.deepcopy(self.models["pose_encoder"])
-                # self.models_before["pose"] = copy.deepcopy(self.models["pose"])
-                # self.models_before["pose"].to(self.device)
-
+                self.models["pose_encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["pose_encoder"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
+                self.models["pose"] = torch.nn.parallel.DistributedDataParallel(self.models["pose"].cuda(self.opt.local_rank),
+                                                        device_ids=[self.opt.local_rank],
+                                                        output_device=self.opt.local_rank,
+                                                        broadcast_buffers=False,
+                                                        find_unused_parameters=True)
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(
@@ -162,9 +188,16 @@ class Trainer:
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
-        self.train_loader = DataLoader(
-            train_dataset, self.opt.batch_size, True,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
+        # sampler
+        self.train_sampler  = DistributedSampler(train_dataset)
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, 	
+											batch_size=self.opt.batch_size,
+											drop_last=True,
+											sampler=self.train_sampler,
+                                            num_workers=self.opt.num_workers)        
+        # self.train_loader = DataLoader(
+        #     train_dataset, self.opt.batch_size, True,
+        #     num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
@@ -221,8 +254,9 @@ class Trainer:
         self.step = 0
         self.start_time = time.time()
         for self.epoch in range(self.opt.num_epochs):
+            dist.barrier()
             self.run_epoch()
-            if (self.epoch + 1) % self.opt.save_frequency == 0:
+            if (self.epoch + 1) % self.opt.save_frequency == 0 and self.opt.local_rank==0:
                 self.save_model()
 
     def run_epoch(self):
@@ -260,7 +294,7 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-            
+            self.train_sampler.set_epoch(self.epoch)
             before_op_time = time.time()
             # if self.step==0:
             #     params_encoder_t = copy.deepcopy(self.models["encoder"].state_dict())
@@ -271,23 +305,7 @@ class Trainer:
             losses["loss"].backward()
             self.model_optimizer.step()
             
-            # with torch.no_grad():
-            #     params_encoder_s = self.models["encoder"].state_dict()
-            #     params_depth_s = self.models["depth"].state_dict()
-                
-            #     uniform_soup = {k: v * (0.001) + params_encoder_t[k] * (0.999) for k, v in params_encoder_s.items()}
-            #     params_encoder_t.update(uniform_soup)
-            #     uniform_soup = {k: v * (0.001) + params_depth_t[k] * (0.999) for k, v in params_depth_s.items()}
-            #     params_depth_t.update(uniform_soup)
-
-                # buffers_encoder_s = self.models["encoder"].buffers()
-                # buffers_depth_s = self.models["depth"].buffers()
-                # buffers_encoder_t = self.models_before["encoder"].buffers()
-                # buffers_depth_t = self.models_before["depth"].buffers()
-                # for s,t in zip(buffers_encoder_s,buffers_encoder_t):
-                #     t = 0.999*t+0.001*s
-                # for s,t in zip(buffers_depth_s,buffers_depth_t):
-                #     t = 0.999*t+0.001*s                
+               
             duration = time.time() - before_op_time
 
             # log less frequently after the first 2000 steps to save time & disk space
@@ -534,6 +552,7 @@ class Trainer:
                     T = inputs["stereo_T"]
                 else:
                     T = outputs[("cam_T_cam", 0, frame_id)]
+                    self.T = outputs[("cam_T_cam", 0, 1)]
                     # if outputs_before:
                     #     T_before = outputs_before[("cam_T_cam", 0, frame_id)]
 
@@ -615,14 +634,36 @@ class Trainer:
             if outputs_before:
                 depth = outputs[("depth", 0, scale)]
                 depth_before = outputs_before[("depth", 0, scale)]
-                # uncer_before = outputs_before[("uncer", scale)]
+                #cross check view
+                with torch.no_grad():
+                    B,C,H,W = depth_before.shape
+                    final_cross_mask = np.zeros([B,C,H,W])
+                    features_src = self.models_before["encoder"](inputs["color_aug", 1, 0]) #frame = 1
+                    outputs_src = self.models_before["depth"](features_src)
+                    disp_src = outputs_src[("disp", scale)]
+                    disp_src = F.interpolate(
+                        disp_src, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                    _, depth_src_batch = disp_to_depth(disp_src, self.opt.min_depth, self.opt.max_depth)    
 
-            for frame_id in self.opt.frame_ids[1:]:     # [0,-1,1]
+                    for i in range(B):
+                        depth_ref = outputs_before[("depth", 0, scale)][i,0,:,:].detach().cpu().numpy()
+                        depth_src = depth_src_batch[i,0,:,:].detach().cpu().numpy()    #frame = 1
+                        intrinsics_ref =  inputs[("K", source_scale)][i,:,:].detach().cpu().numpy()[:3,:3]
+                        intrinsics_src = inputs[("K", source_scale)][i,:,:].detach().cpu().numpy()[:3,:3]
+                        T = self.T[i,:,:].detach().cpu().numpy()
+                        
+                        cross_mask, _, _, _ = check_geometric_consistency(depth_ref, intrinsics_ref, 
+                                                                        depth_src, intrinsics_src, 
+                                                                        T)
+                        # cross_mask = cross_mask >= 1    # 'threshold of num view' 
+                        final_cross_mask[i,0,:,:] = cross_mask
+                    
+                    outputs[("cross_mask", scale)] = final_cross_mask  #B,C,H,W
+                    final_cross_mask = torch.tensor(final_cross_mask).to(depth_before.device)
+
+            for frame_id in self.opt.frame_ids[1:]:     # frame_ids = [0,-1,1]
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-                # if outputs_before:
-                #     pred_before = outputs_before[("color", frame_id, scale)]
-                #     uncertain_map.append(self.compute_reprojection_loss(pred_before,target))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
             # if outputs_before:
@@ -687,7 +728,7 @@ class Trainer:
             norm_disp = disp / (mean_disp + 1e-7)
             smooth_loss = get_smooth_loss(norm_disp, color)
             if outputs_before:
-                depth_loss = torch.abs(depth-depth_before.detach())  
+                depth_loss = torch.abs(depth-depth_before.detach())*final_cross_mask  
                 # uncer_loss = torch.square((depth-depth_before.detach())/(uncer+1e-7)).sum()/((1/(uncer**2+1e-7)).sum()) \
                             # +(4*torch.log(uncer+1e-7)).mean()
                 loss =loss +  0.1*depth_loss.mean()
@@ -756,6 +797,9 @@ class Trainer:
                     writer.add_image(
                         "color_{}_{}/{}".format(frame_id, s, j),
                         inputs[("color", frame_id, s)][j].data, self.step)
+                    wandb.log({"color_{}_{}/{}".format(frame_id, s, j):
+                        wandb.Image(inputs[("color", frame_id, s)][j].data.detach().cpu().numpy().transpose(1,2,0))
+                    })
                     if s == 0 and frame_id != 0:
                         writer.add_image(
                             "color_pred_{}_{}/{}".format(frame_id, s, j),
@@ -764,13 +808,23 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                # writer.add_image(
-                #     "uncer_{}/{}".format(s, j),
-                #     normalize_image(1/(1e-7+outputs[("uncer", s)][j])), self.step)
+                if self.epoch>=1:
+                    wandb.log({
+                        "cross_mask_{}/{}".format(s, j):
+                            wandb.Image((outputs[("cross_mask", s)][j]).transpose(1,2,0))
+                        })                     
+                wandb.log({
+                    "disp_{}/{}".format(s, j):
+                        wandb.Image(normalize_image(outputs[("disp", s)][j]).detach().cpu().numpy().transpose(1,2,0))
+                    }) 
                 if s<3:
                     writer.add_image(
                         "delta_{}/{}".format(s, j),
                         colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True)), self.step)
+                    wandb.log({
+                        "delta_{}/{}".format(s, j):
+                        wandb.Image(colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True).detach()).transpose(1,2,0))
+                    })
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(

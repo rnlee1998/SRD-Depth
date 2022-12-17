@@ -24,12 +24,9 @@ from layers import *
 
 import datasets
 import networks
-from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder
+from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder,depth_decoder
 from IPython import embed
 import copy
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel
-import torch.distributed as dist
 import wandb
 wandb.init(project="monovit", entity="e701")
 class Trainer:
@@ -44,10 +41,7 @@ class Trainer:
         self.models = {}            #
         self.parameters_to_train = []
 
-        # self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
-        self.device = torch.device('cuda',self.opt.local_rank)
-        dist.init_process_group(backend='nccl',rank=self.opt.local_rank, world_size=self.opt.word_size)
-        torch.cuda.set_device(self.device)
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -58,38 +52,25 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
         if self.opt.use_stereo:
-            self.opt.frame_ids.append("s")
-        
-        #   resnet
+            self.opt.frame_ids.append("s")      
         # self.models["encoder"] = resnet_encoder.ResnetEncoder(
         #     self.opt.num_layers, self.opt.weights_init == "pretrained")
-        
-        #   mpvit
+        # self.models["encoder"].to(self.device)
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
+
         self.models["encoder"] = mpvit.mpvit_small()
         self.models["encoder"].num_ch_enc = [64,128,216,288,288]
-
-        #   swin Transformer
-        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny",pretrained=True)
-
         self.models["encoder"].to(self.device)
-        
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
 
+        # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny")
+        # self.models["encoder"].to(self.device)
+        # self.parameters_to_train += list(self.models["encoder"].parameters())
+ 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-
-        # dataparallel
-        self.models["encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["encoder"].cuda(self.opt.local_rank),
-                                                        device_ids=[self.opt.local_rank],
-                                                        output_device=self.opt.local_rank,
-                                                        broadcast_buffers=False,
-                                                        find_unused_parameters=True)
-        self.models["depth"] = torch.nn.parallel.DistributedDataParallel(self.models["depth"].cuda(self.opt.local_rank),
-                                                        device_ids=[self.opt.local_rank],
-                                                        output_device=self.opt.local_rank,
-                                                        broadcast_buffers=False,
-                                                        find_unused_parameters=True)
         
         self.models_before ={}
         self.models_before["encoder"] = copy.deepcopy(self.models["encoder"])
@@ -110,16 +91,10 @@ class Trainer:
                     num_input_features=1,
                     num_frames_to_predict_for=2)
                 
-                self.models["pose_encoder"] = torch.nn.parallel.DistributedDataParallel(self.models["pose_encoder"].cuda(self.opt.local_rank),
-                                                        device_ids=[self.opt.local_rank],
-                                                        output_device=self.opt.local_rank,
-                                                        broadcast_buffers=False,
-                                                        find_unused_parameters=True)
-                self.models["pose"] = torch.nn.parallel.DistributedDataParallel(self.models["pose"].cuda(self.opt.local_rank),
-                                                        device_ids=[self.opt.local_rank],
-                                                        output_device=self.opt.local_rank,
-                                                        broadcast_buffers=False,
-                                                        find_unused_parameters=True)
+                # self.models_before["pose_encoder"] = copy.deepcopy(self.models["pose_encoder"])
+                # self.models_before["pose"] = copy.deepcopy(self.models["pose"])
+                # self.models_before["pose"].to(self.device)
+
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(
@@ -188,16 +163,9 @@ class Trainer:
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
-        # sampler
-        self.train_sampler  = DistributedSampler(train_dataset)
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, 	
-											batch_size=self.opt.batch_size,
-											drop_last=True,
-											sampler=self.train_sampler,
-                                            num_workers=self.opt.num_workers)        
-        # self.train_loader = DataLoader(
-        #     train_dataset, self.opt.batch_size, True,
-        #     num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
+        self.train_loader = DataLoader(
+            train_dataset, self.opt.batch_size, True,
+            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
@@ -254,47 +222,36 @@ class Trainer:
         self.step = 0
         self.start_time = time.time()
         for self.epoch in range(self.opt.num_epochs):
-            dist.barrier()
             self.run_epoch()
-            if (self.epoch + 1) % self.opt.save_frequency == 0 and self.opt.local_rank==0:
+            if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
 
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        if self.epoch>=1:
-            encoder_path = os.path.join(self.opt.log_dir,
-                                        self.opt.model_name,
-                                        "models",
-                                        "weights_%s"%(self.epoch-1) ,
-                                        "encoder.pth")
-            decoder_path = os.path.join(self.opt.log_dir,
-                                        self.opt.model_name,
-                                        "models",
-                                        "weights_%s"%(self.epoch-1) ,
-                                        "depth.pth")
-            pose_encoder_path = os.path.join(self.opt.log_dir,
-                                        self.opt.model_name,
-                                        "models",
-                                        "weights_%s"%(self.epoch-1) ,
-                                        "pose_encoder.pth")
-            pose_decoder_path = os.path.join(self.opt.log_dir,
-                                        self.opt.model_name,
-                                        "models",
-                                        "weights_%s"%(self.epoch-1) ,
-                                        "pose.pth")
-            encoder_dict = torch.load(encoder_path)
-            model_dict = self.models_before["encoder"].state_dict()
-            self.models_before["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-            self.models_before["depth"].load_state_dict(torch.load(decoder_path))
-            # self.models_before["pose_encoder"].load_state_dict(torch.load(pose_encoder_path))
-            # self.models_before["pose"].load_state_dict(torch.load(pose_decoder_path))
+        # if self.epoch>=1:
+        #     encoder_path = os.path.join(self.opt.log_dir,
+        #                                 self.opt.model_name,
+        #                                 "models",
+        #                                 "weights_%s"%(self.epoch-1) ,
+        #                                 "encoder.pth")
+        #     decoder_path = os.path.join(self.opt.log_dir,
+        #                                 self.opt.model_name,
+        #                                 "models",
+        #                                 "weights_%s"%(self.epoch-1) ,
+        #                                 "depth.pth")
+
+        #     encoder_dict = torch.load(encoder_path)
+        #     model_dict = self.models_before["encoder"].state_dict()
+        #     self.models_before["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
+        #     self.models_before["depth"].load_state_dict(torch.load(decoder_path))
+
 
         print("Training")
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
-            self.train_sampler.set_epoch(self.epoch)
+            
             before_op_time = time.time()
             # if self.step==0:
             #     params_encoder_t = copy.deepcopy(self.models["encoder"].state_dict())
@@ -305,7 +262,23 @@ class Trainer:
             losses["loss"].backward()
             self.model_optimizer.step()
             
-               
+            # with torch.no_grad():
+            #     params_encoder_s = self.models["encoder"].state_dict()
+            #     params_depth_s = self.models["depth"].state_dict()
+                
+            #     uniform_soup = {k: v * (0.001) + params_encoder_t[k] * (0.999) for k, v in params_encoder_s.items()}
+            #     params_encoder_t.update(uniform_soup)
+            #     uniform_soup = {k: v * (0.001) + params_depth_t[k] * (0.999) for k, v in params_depth_s.items()}
+            #     params_depth_t.update(uniform_soup)
+
+                # buffers_encoder_s = self.models["encoder"].buffers()
+                # buffers_depth_s = self.models["depth"].buffers()
+                # buffers_encoder_t = self.models_before["encoder"].buffers()
+                # buffers_depth_t = self.models_before["depth"].buffers()
+                # for s,t in zip(buffers_encoder_s,buffers_encoder_t):
+                #     t = 0.999*t+0.001*s
+                # for s,t in zip(buffers_depth_s,buffers_depth_t):
+                #     t = 0.999*t+0.001*s                
             duration = time.time() - before_op_time
 
             # log less frequently after the first 2000 steps to save time & disk space
@@ -347,7 +320,7 @@ class Trainer:
             features = self.models["encoder"](inputs["color_aug", 0, 0])
             outputs = self.models["depth"](features)
 
-            if self.epoch>=1:
+            if self.epoch>=0:
                 with torch.no_grad():
                     features_before = self.models_before["encoder"](inputs["color_aug", 0, 0])
                     outputs_before = self.models_before["depth"](features_before)
@@ -661,9 +634,12 @@ class Trainer:
                     outputs[("cross_mask", scale)] = final_cross_mask  #B,C,H,W
                     final_cross_mask = torch.tensor(final_cross_mask).to(depth_before.device)
 
-            for frame_id in self.opt.frame_ids[1:]:     # frame_ids = [0,-1,1]
+            for frame_id in self.opt.frame_ids[1:]:     # [0,-1,1]
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+                # if outputs_before:
+                #     pred_before = outputs_before[("color", frame_id, scale)]
+                #     uncertain_map.append(self.compute_reprojection_loss(pred_before,target))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
             # if outputs_before:
@@ -808,7 +784,7 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                if self.epoch>=1:
+                if self.epoch>=0:
                     wandb.log({
                         "cross_mask_{}/{}".format(s, j):
                             wandb.Image((outputs[("cross_mask", s)][j]).transpose(1,2,0))

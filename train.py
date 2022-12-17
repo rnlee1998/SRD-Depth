@@ -6,13 +6,23 @@
 
 from __future__ import absolute_import, division, print_function
 
-from trainer import Trainer
+from trainer2 import Trainer
 from options import MonodepthOptions
-
+import os
+import torch
+import numpy as np
 options = MonodepthOptions()
 opts = options.parse()
 
 
 if __name__ == "__main__":
+    seed = 3407
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    np.random.seed(seed)
     trainer = Trainer(opts)
     trainer.train()
+

@@ -201,8 +201,8 @@ def check_geometric_consistency(depth_ref, intrinsics_ref, depth_src, intrinsics
     # check |d_reproj-d_1| / d_1 < 0.01
     depth_diff = np.abs(depth_reprojected - depth_ref)
     relative_depth_diff = depth_diff / depth_ref                    
-    mask = np.logical_and(dist < 4*dist.mean(), relative_depth_diff < 4*relative_depth_diff.mean())
-    # mask = relative_depth_diff < 4*relative_depth_diff.mean()
+    # mask = np.logical_and(dist < dist.mean(), relative_depth_diff < 2*relative_depth_diff.mean())
+    mask = relative_depth_diff < 6*relative_depth_diff.mean()
     depth_reprojected[~mask] = 0
 
     return mask, depth_reprojected, x2d_src, y2d_src

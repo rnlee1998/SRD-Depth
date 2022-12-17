@@ -89,12 +89,12 @@ def evaluate(opt):
         dataloader = DataLoader(dataset, 8, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
-        # encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
-        # encoder.num_ch_enc = [64,128,216,288,288]  # = networks.ResnetEncoder(opt.num_layers, False)
-        # depth_decoder = networks.DepthDecoder()
+        encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
+        encoder.num_ch_enc = [64,128,216,288,288]  # = networks.ResnetEncoder(opt.num_layers, False)
+        depth_decoder = networks.DepthDecoder()
 
-        encoder = resnet_encoder.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
+        # encoder = resnet_encoder.ResnetEncoder(opt.num_layers, False)
+        # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
 
         # encoder = swin_encoder.SwinEncoder("swin_tiny",False)
         # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, False)
