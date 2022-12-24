@@ -15,6 +15,8 @@ from options import MonodepthOptions
 import datasets
 import networks
 
+import scipy.io as scio
+
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
 
@@ -76,14 +78,16 @@ def evaluate(opt):
 
         print("-> Loading weights from {}".format(opt.load_weights_folder))
 
-        filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
+        filenames = readlines(os.path.join(splits_dir, "make3d", "test_img_list.txt"))
+        # MAKE3D_ROOT_DIR = "/mnt/data/liran/dataset/make3D/" 
+        # filenames = readlines(os.path.join(MAKE3D_ROOT_DIR, "Test134", "test_files.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
         encoder_dict = torch.load(encoder_path)
         decoder_dict = torch.load(decoder_path)
-
-        dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
+        MAKE3D_DATA_DIR = "/mnt/data/liran/dataset/make3D/"
+        dataset = datasets.MAKE3DRAWDataset(MAKE3D_DATA_DIR, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
                                            [0], 4, is_train=False)
         dataloader = DataLoader(dataset, 8, shuffle=False, num_workers=opt.num_workers,
@@ -176,8 +180,13 @@ def evaluate(opt):
         print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
         quit()
 
-    gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True,allow_pickle=True, encoding='latin1')["data"]
+    gt_path = readlines(os.path.join(splits_dir, "make3d", "test_depth_list.txt"))
+    gt_depths = []
+    for i in gt_path:
+        gt = scio.loadmat(os.path.join(MAKE3D_DATA_DIR,i))['Position3DGrid'][:,:,3]
+        gt_depths.append(gt)
+
+    # gt_depths = np.load(gt_path, fix_imports=True,allow_pickle=True, encoding='latin1')["data"]
 
     print("-> Evaluating")
 
@@ -226,6 +235,8 @@ def evaluate(opt):
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
 
         errors.append(compute_errors(gt_depth, pred_depth))
+        # save_vis = True
+        # if save_vis:
 
     if not opt.disable_median_scaling:
         ratios = np.array(ratios)
@@ -233,8 +244,6 @@ def evaluate(opt):
         print(" Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med)))
 
     mean_errors = np.array(errors).mean(0)
-
-
 
     results_edit=open('results.txt',mode='a')
     results_edit.write("\n " + 'model_name: %s '%(opt.load_weights_folder))
