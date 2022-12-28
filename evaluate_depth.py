@@ -14,7 +14,8 @@ from utils import readlines
 from options import MonodepthOptions
 import datasets
 import networks
-
+import matplotlib.pyplot as plt
+import scipy.io as scio
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
 
@@ -198,6 +199,16 @@ def evaluate(opt):
         gt_height, gt_width = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
+        # -----------------------------visualize color map-----------------------------
+        save_vis = True
+        save_dir = "/mnt/data/liran/workdir/monovit/vis_pic/kitti"
+        if save_vis:
+            pic_name = filenames[i].split()[0].split('/')[-1]+'_'+filenames[i].split()[1]+'_sr.png'
+            plt.imsave(os.path.join(save_dir,'sr',pic_name), pred_disp, cmap='magma')
+            # depth_name = filenames[i].split()[0].split('/')[-1]+'_'+filenames[i].split()[1]+'.npy'
+            # np.save(os.path.join(save_dir,'npz',depth_name), 1/pred_disp)
+        # -----------------------------------------------------------------------------
+
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
         pred_depth = 1 / pred_disp
 

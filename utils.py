@@ -6,7 +6,6 @@
 
 from __future__ import absolute_import, division, print_function
 from torch import nn
-from inverse_warp import inverse_warp2, inverse_warp
 import math
 import os
 import hashlib
@@ -119,10 +118,10 @@ def download_model_if_doesnt_exist(model_name):
 
         print("   Model unzipped to {}".format(model_path))
 
-def colormap(inputs, normalize=True, torch_transpose=True):
+def colormap(inputs, mode='jet',normalize=True, torch_transpose=True):
     if isinstance(inputs, torch.Tensor):
         inputs = inputs.detach().cpu().numpy()
-    _DEPTH_COLORMAP = plt.get_cmap('jet', 256)  # for plotting
+    _DEPTH_COLORMAP = plt.get_cmap(mode, 256)  # for plotting
     vis = inputs
     if normalize:
         ma = float(vis.max())
@@ -146,6 +145,7 @@ def colormap(inputs, normalize=True, torch_transpose=True):
         vis = vis[..., :3]
         if torch_transpose:
             vis = vis.transpose(2, 0, 1)
+        return vis
 
     return vis[0,:,:,:]
 
@@ -201,8 +201,9 @@ def check_geometric_consistency(depth_ref, intrinsics_ref, depth_src, intrinsics
     # check |d_reproj-d_1| / d_1 < 0.01
     depth_diff = np.abs(depth_reprojected - depth_ref)
     relative_depth_diff = depth_diff / depth_ref                    
-    mask = np.logical_and(dist < 4*dist.mean(), relative_depth_diff < 4*relative_depth_diff.mean())
-    # mask = relative_depth_diff < 4*relative_depth_diff.mean()
+    # mask = np.logical_and(dist < 4*dist.mean(), relative_depth_diff < 4*relative_depth_diff.mean())
+    mask = relative_depth_diff < 4*relative_depth_diff.mean()
+    # mask = 1 - relative_depth_diff / relative_depth_diff.max()
     depth_reprojected[~mask] = 0
 
     return mask, depth_reprojected, x2d_src, y2d_src

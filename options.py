@@ -39,7 +39,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_layers",
                                  type=int,
                                  help="number of resnet layers",
-                                 default=18,
+                                 default=50,
                                  choices=[18, 34, 50, 101, 152])
         self.parser.add_argument("--dataset",
                                  type=str,
@@ -87,7 +87,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=10)
+                                 default=12)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -203,7 +203,7 @@ class MonodepthOptions:
                                       "from the original monodepth paper",
                                  action="store_true")
         self.parser.add_argument('--local_rank', type=int,default=0,help='local device id on current node')
-        self.parser.add_argument('--word_size', default=2,help="n_gpus")
+        self.parser.add_argument('--word_size', default=3,help="n_gpus")
         self.parser.add_argument('--init_method', default='tcp://127.0.0.1:5349',help="init-method")
 
     def parse(self):

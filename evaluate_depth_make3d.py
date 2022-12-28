@@ -14,7 +14,7 @@ from utils import readlines
 from options import MonodepthOptions
 import datasets
 import networks
-
+import matplotlib.pyplot as plt
 import scipy.io as scio
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
@@ -88,9 +88,9 @@ def evaluate(opt):
         decoder_dict = torch.load(decoder_path)
         MAKE3D_DATA_DIR = "/mnt/data/liran/dataset/make3D/"
         dataset = datasets.MAKE3DRAWDataset(MAKE3D_DATA_DIR, filenames,
-                                           encoder_dict['height'], encoder_dict['width'],
+                                           2048,1536,
                                            [0], 4, is_train=False)
-        dataloader = DataLoader(dataset, 8, shuffle=False, num_workers=opt.num_workers,
+        dataloader = DataLoader(dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
         encoder = mpvit.mpvit_small() #networks.ResnetEncoder(opt.num_layers, False)
@@ -124,7 +124,6 @@ def evaluate(opt):
         with torch.no_grad():
             for data in dataloader:
                 input_color = data[("color", 0, 0)].cuda()
-
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
@@ -133,7 +132,6 @@ def evaluate(opt):
 
                 pred_disp, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
-
                 if opt.post_process:
                     N = pred_disp.shape[0] // 2
                     pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
@@ -204,9 +202,17 @@ def evaluate(opt):
     for i in range(pred_disps.shape[0]):
 
         gt_depth = gt_depths[i]
-        gt_height, gt_width = gt_depth.shape[:2]
+        gt_height,gt_width  = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
+        # -----------------------------visualize color map-----------------------------
+        save_vis = True
+        save_dir = "/mnt/data/liran/workdir/monovit/vis_pic/make3d"
+        if save_vis:
+            pred_disp_vis = cv2.resize(pred_disp, (1704, 2272))
+            plt.imsave(os.path.join(save_dir,'sr',gt_path[i].split('/')[-1].replace('.mat','_sr.png')), pred_disp_vis, cmap='magma')
+        # -----------------------------------------------------------------------------
+
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
         pred_depth = 1 / pred_disp
 
@@ -222,9 +228,10 @@ def evaluate(opt):
         else:
             mask = gt_depth > 0
 
+
         pred_depth = pred_depth[mask]
         gt_depth = gt_depth[mask]
-
+        
         pred_depth *= opt.pred_depth_scale_factor
         if not opt.disable_median_scaling:
             ratio = np.median(gt_depth) / np.median(pred_depth)
@@ -235,8 +242,6 @@ def evaluate(opt):
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
 
         errors.append(compute_errors(gt_depth, pred_depth))
-        # save_vis = True
-        # if save_vis:
 
     if not opt.disable_median_scaling:
         ratios = np.array(ratios)

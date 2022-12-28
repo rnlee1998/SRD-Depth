@@ -6,7 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 
-from trainer2 import Trainer
+from trainer import Trainer
 from options import MonodepthOptions
 import os
 import torch

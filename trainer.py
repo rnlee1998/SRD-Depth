@@ -61,12 +61,12 @@ class Trainer:
             self.opt.frame_ids.append("s")
         
         #   resnet
-        # self.models["encoder"] = resnet_encoder.ResnetEncoder(
-        #     self.opt.num_layers, self.opt.weights_init == "pretrained")
+        self.models["encoder"] = resnet_encoder.ResnetEncoder(
+            self.opt.num_layers, self.opt.weights_init == "pretrained")
         
         #   mpvit
-        self.models["encoder"] = mpvit.mpvit_small()
-        self.models["encoder"].num_ch_enc = [64,128,216,288,288]
+        # self.models["encoder"] = mpvit.mpvit_small()
+        # self.models["encoder"].num_ch_enc = [64,128,216,288,288]
 
         #   swin Transformer
         # self.models["encoder"] = swin_encoder.SwinEncoder("swin_tiny",pretrained=True)
@@ -360,8 +360,6 @@ class Trainer:
 
         if self.use_pose_net:   #
             outputs.update(self.predict_poses(inputs, features))
-            # if outputs_before:
-            #     outputs_before.update(self.predict_poses2(inputs, features_before))
 
         self.generate_images_pred(inputs, outputs, outputs_before)
         losses = self.compute_losses(inputs, outputs, outputs_before)
@@ -427,67 +425,6 @@ class Trainer:
                         axisangle[:, i], translation[:, i])
 
         return outputs
-
-    def predict_poses2(self, inputs, features):
-        """Predict poses between input frames for monocular sequences.
-        """
-        outputs_before = {}
-        if self.num_pose_frames == 2:
-          
-            # In this setting, we compute the pose to each source frame via a
-            # separate forward pass through the pose network.
-
-            # select what features the pose network takes as input
-            if self.opt.pose_model_type == "shared":
-                pose_feats = {f_i: features[f_i] for f_i in self.opt.frame_ids}
-            else:
-                pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
-
-            for f_i in self.opt.frame_ids[1:]:
-                if f_i != "s":
-                    # To maintain ordering we always pass frames in temporal order
-                    if f_i < 0:
-                        pose_inputs = [pose_feats[f_i], pose_feats[0]]
-                    else:
-                        pose_inputs = [pose_feats[0], pose_feats[f_i]]
-
-                    if self.opt.pose_model_type == "separate_resnet":
-                        pose_inputs = [self.models_before["pose_encoder"](torch.cat(pose_inputs, 1))]
-                    elif self.opt.pose_model_type == "posecnn":
-                        pose_inputs = torch.cat(pose_inputs, 1)
-
-                    axisangle, translation = self.models_before["pose"](pose_inputs)
-
-                    outputs_before[("axisangle", 0, f_i)] = axisangle
-                    outputs_before[("translation", 0, f_i)] = translation
-
-                    # Invert the matrix if the frame id is negative
-                    outputs_before[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
-                        axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
-
-        else:
-            # Here we input all frames to the pose net (and predict all poses) together
-            if self.opt.pose_model_type in ["separate_resnet", "posecnn"]:
-                pose_inputs = torch.cat(
-                    [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
-
-                if self.opt.pose_model_type == "separate_resnet":
-                    pose_inputs = [self.models_before["pose_encoder"](pose_inputs)]
-
-            elif self.opt.pose_model_type == "shared":
-                pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
-
-            axisangle, translation = self.models_before["pose"](pose_inputs)
-
-            for i, f_i in enumerate(self.opt.frame_ids[1:]):
-                if f_i != "s":
-                    outputs_before[("axisangle", 0, f_i)] = axisangle
-                    outputs_before[("translation", 0, f_i)] = translation
-                    outputs_before[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
-                        axisangle[:, i], translation[:, i])
-
-        return outputs_before
-
 
     def val(self):
         """Validate the model on a single minibatch
@@ -817,13 +754,21 @@ class Trainer:
                     "disp_{}/{}".format(s, j):
                         wandb.Image(normalize_image(outputs[("disp", s)][j]).detach().cpu().numpy().transpose(1,2,0))
                     }) 
+                # _,depth = disp_to_depth(outputs[("disp", s)][j], self.opt.min_depth, self.opt.max_depth)
+                wandb.log({
+                    "depth_{}/{}".format(s, j):
+                        wandb.Image(colormap(outputs[("disp", s)][j].detach(),'magma').transpose(1,2,0))
+                    })                 
                 if s<3:
                     writer.add_image(
                         "delta_{}/{}".format(s, j),
                         colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True)), self.step)
+                    delta0 =  (outputs[("delta", s)][j][0]+outputs[("delta", s)][j][0].min().abs()).detach() 
+                    delta1 =  (outputs[("delta", s)][j][1]+outputs[("delta", s)][j][1].min().abs()).detach()
+                    delta = (delta0+delta1)/2
                     wandb.log({
                         "delta_{}/{}".format(s, j):
-                        wandb.Image(colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True).detach()).transpose(1,2,0))
+                        wandb.Image(colormap(delta,'viridis').transpose(1,2,0))
                     })
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
