@@ -27,8 +27,8 @@ import networks
 from networks import resnet_encoder,pose_decoder,mpvit,swin_encoder,depth_decoder
 from IPython import embed
 import copy
-import wandb
-wandb.init(project="monovit", entity="e701")
+# import wandb
+# wandb.init(project="sr",entity="liran")
 class Trainer:
     def __init__(self, options):
         self.opt = options
@@ -229,22 +229,22 @@ class Trainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        # if self.epoch>=1:
-        #     encoder_path = os.path.join(self.opt.log_dir,
-        #                                 self.opt.model_name,
-        #                                 "models",
-        #                                 "weights_%s"%(self.epoch-1) ,
-        #                                 "encoder.pth")
-        #     decoder_path = os.path.join(self.opt.log_dir,
-        #                                 self.opt.model_name,
-        #                                 "models",
-        #                                 "weights_%s"%(self.epoch-1) ,
-        #                                 "depth.pth")
+        if self.epoch>=1:
+            encoder_path = os.path.join(self.opt.log_dir,
+                                        self.opt.model_name,
+                                        "models",
+                                        "weights_%s"%(self.epoch-1) ,
+                                        "encoder.pth")
+            decoder_path = os.path.join(self.opt.log_dir,
+                                        self.opt.model_name,
+                                        "models",
+                                        "weights_%s"%(self.epoch-1) ,
+                                        "depth.pth")
 
-        #     encoder_dict = torch.load(encoder_path)
-        #     model_dict = self.models_before["encoder"].state_dict()
-        #     self.models_before["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        #     self.models_before["depth"].load_state_dict(torch.load(decoder_path))
+            encoder_dict = torch.load(encoder_path)
+            model_dict = self.models_before["encoder"].state_dict()
+            self.models_before["encoder"].load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
+            self.models_before["depth"].load_state_dict(torch.load(decoder_path))
 
 
         print("Training")
@@ -320,7 +320,7 @@ class Trainer:
             features = self.models["encoder"](inputs["color_aug", 0, 0])
             outputs = self.models["depth"](features)
 
-            if self.epoch>=0:
+            if self.epoch>=1:
                 with torch.no_grad():
                     features_before = self.models_before["encoder"](inputs["color_aug", 0, 0])
                     outputs_before = self.models_before["depth"](features_before)
@@ -773,9 +773,9 @@ class Trainer:
                     writer.add_image(
                         "color_{}_{}/{}".format(frame_id, s, j),
                         inputs[("color", frame_id, s)][j].data, self.step)
-                    wandb.log({"color_{}_{}/{}".format(frame_id, s, j):
-                        wandb.Image(inputs[("color", frame_id, s)][j].data.detach().cpu().numpy().transpose(1,2,0))
-                    })
+                    # wandb.log({"color_{}_{}/{}".format(frame_id, s, j):
+                    #     wandb.Image(inputs[("color", frame_id, s)][j].data.detach().cpu().numpy().transpose(1,2,0))
+                    # })
                     if s == 0 and frame_id != 0:
                         writer.add_image(
                             "color_pred_{}_{}/{}".format(frame_id, s, j),
@@ -784,23 +784,26 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-                if self.epoch>=0:
-                    wandb.log({
-                        "cross_mask_{}/{}".format(s, j):
-                            wandb.Image((outputs[("cross_mask", s)][j]).transpose(1,2,0))
-                        })                     
-                wandb.log({
-                    "disp_{}/{}".format(s, j):
-                        wandb.Image(normalize_image(outputs[("disp", s)][j]).detach().cpu().numpy().transpose(1,2,0))
-                    }) 
+                if self.epoch>=1:
+                    # wandb.log({
+                    #     "cross_mask_{}/{}".format(s, j):
+                    #         wandb.Image((outputs[("cross_mask", s)][j]).transpose(1,2,0))
+                    #     })  
+                    writer.add_image(
+                        "cross_mask_{}/{}".format(s, j),
+                        torch.tensor(outputs[("cross_mask", s)][j]), self.step)                   
+                # wandb.log({
+                #     "disp_{}/{}".format(s, j):
+                #         wandb.Image(normalize_image(outputs[("disp", s)][j]).detach().cpu().numpy().transpose(1,2,0))
+                #     }) 
                 if s<3:
                     writer.add_image(
                         "delta_{}/{}".format(s, j),
                         colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True)), self.step)
-                    wandb.log({
-                        "delta_{}/{}".format(s, j):
-                        wandb.Image(colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True).detach()).transpose(1,2,0))
-                    })
+                    # wandb.log({
+                    #     "delta_{}/{}".format(s, j):
+                    #     wandb.Image(colormap(torch.abs(outputs[("delta", s)][j]).mean(dim=0,keepdim=True).detach()).transpose(1,2,0))
+                    # })
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(
