@@ -1,6 +1,6 @@
 # Self-Supervised Monocular Depth Estimation with Self-Reference Distillation and Disparity Offset Refinement
 
-README.md follows the monodepth2 and our modification will be updated ...
+Paper link: https://arxiv.org/abs/2302.09789
 
 ## ⚙️ Setup
 
